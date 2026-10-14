@@ -5769,7 +5769,7 @@ fptr_finalize_flush(rb_io_t *fptr, int noraise, int keepgvl)
     fptr->mode &= ~(FMODE_READABLE|FMODE_WRITABLE);
 
     // Wait for blocking operations to ensure they do not hit EBADF:
-    rb_thread_io_close_wait(fptr);
+    int state = rb_thread_io_close_wait(fptr);
 
     if (!done && stdio_file) {
         // stdio_file is deallocated anyway even if fclose failed.
@@ -5805,6 +5805,8 @@ fptr_finalize_flush(rb_io_t *fptr, int noraise, int keepgvl)
 
         done = 1;
     }
+
+    if (state) rb_jump_tag(state);
 
     if (!NIL_P(error) && !noraise) {
         if (RB_INTEGER_TYPE_P(error))
@@ -8581,7 +8583,8 @@ io_reopen(VALUE io, VALUE nfile)
     if (fd != fd2) {
         // Interrupt all usage of the old file descriptor:
         rb_thread_io_close_interrupt(fptr);
-        rb_thread_io_close_wait(fptr);
+        int state = rb_thread_io_close_wait(fptr);
+        if (state) rb_jump_tag(state);
 
         if (RUBY_IO_EXTERNAL_P(fptr) || fd <= 2 || !fptr->stdio_file) {
             /* need to keep FILE objects of stdin, stdout and stderr */

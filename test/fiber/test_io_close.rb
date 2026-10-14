@@ -85,6 +85,43 @@ class TestFiberIOClose < Test::Unit::TestCase
     end
   end
 
+  def test_io_close_interrupted_while_waiting
+    with_socket_pair do |i, o|
+      fd = i.fileno
+      reader_error = nil
+      closer_error = nil
+
+      thread = Thread.new do
+        scheduler = Scheduler.new
+        Fiber.set_scheduler scheduler
+
+        Fiber.schedule do
+          i.wait_readable
+        rescue => reader_error
+          # Ignore.
+        end
+
+        closer = Fiber.schedule do
+          i.close
+        rescue => closer_error
+          # Ignore.
+        end
+
+        Fiber.schedule do
+          closer.raise(RuntimeError, "interrupted")
+        end
+      end
+
+      assert_same thread, thread.join(10)
+
+      assert_instance_of IOError, reader_error
+      assert_match(/closed/, reader_error.message)
+      assert_instance_of RuntimeError, closer_error
+      assert_equal "interrupted", closer_error.message
+      assert_raise(Errno::EBADF) { IO.for_fd(fd, autoclose: false) }
+    end
+  end
+
   def test_io_close_blocking_thread
     omit "Interrupting a io_wait read is not supported!" if RUBY_PLATFORM =~ /mswin|mingw/
 

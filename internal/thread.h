@@ -49,7 +49,7 @@ int rb_thread_io_wait(struct rb_thread_struct *th, struct rb_io *io, int events,
 int rb_thread_wait_for_single_fd(struct rb_thread_struct *th, int fd, int events, struct timeval * timeout);
 
 size_t rb_thread_io_close_interrupt(struct rb_io *);
-void rb_thread_io_close_wait(struct rb_io *);
+int rb_thread_io_close_wait(struct rb_io *);
 
 void rb_ec_check_ints(struct rb_execution_context_struct *ec);
 

@@ -3174,25 +3174,68 @@ rb_thread_io_close_interrupt(struct rb_io *io)
     return (size_t)result;
 }
 
-void
+static VALUE
+thread_io_close_wait_blocking_operations(VALUE _io)
+{
+    struct rb_io *io = (struct rb_io *)_io;
+    VALUE wakeup_mutex = io->wakeup_mutex;
+
+    if (!RTEST(rb_mutex_owned_p(wakeup_mutex))) {
+        rb_mutex_lock(wakeup_mutex);
+    }
+
+    while (!ccan_list_empty(rb_io_blocking_operations(io))) {
+        rb_mutex_sleep(wakeup_mutex, Qnil);
+    }
+
+    return Qnil;
+}
+
+/*
+ * Wait until every blocking operation on the IO has exited.
+ *
+ * The blocking operations still exit through wakeup_mutex and wake closing_ec,
+ * so the wait can't be abandoned. An exception raised into it is deferred:
+ * the first one is returned as a tag state, with ec->errinfo set, and the
+ * caller raises it with rb_jump_tag once the descriptor is closed.
+ */
+int
 rb_thread_io_close_wait(struct rb_io* io)
 {
     VALUE wakeup_mutex = io->wakeup_mutex;
 
     if (!RB_TEST(wakeup_mutex)) {
         // There was nobody else using this file when we closed it, so we never bothered to allocate a mutex:
-        return;
+        return TAG_NONE;
     }
 
-    rb_mutex_lock(wakeup_mutex);
-    while (!ccan_list_empty(rb_io_blocking_operations(io))) {
-        rb_mutex_sleep(wakeup_mutex, Qnil);
+    rb_execution_context_t *ec = GET_EC();
+    int deferred_state = TAG_NONE;
+    VALUE deferred_errinfo = Qnil;
+
+    while (true) {
+        int state;
+        rb_protect(thread_io_close_wait_blocking_operations, (VALUE)io, &state);
+        if (state == TAG_NONE) break;
+
+        if (deferred_state == TAG_NONE) {
+            deferred_state = state;
+            deferred_errinfo = ec->errinfo;
+        }
     }
+
     rb_mutex_unlock(wakeup_mutex);
 
     // We are done closing:
     io->wakeup_mutex = Qnil;
     io->closing_ec = NULL;
+
+    if (deferred_state != TAG_NONE) {
+        ec->errinfo = deferred_errinfo;
+    }
+    RB_GC_GUARD(deferred_errinfo);
+
+    return deferred_state;
 }
 
 void
